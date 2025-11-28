@@ -1,7 +1,8 @@
 import base64
 import datetime
 import logging
-from telegram import Update
+# បន្ថែម InlineKeyboardButton និង InlineKeyboardMarkup សម្រាប់ប៊ូតុង
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, error
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -9,6 +10,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ConversationHandler,
+    CallbackQueryHandler, # បន្ថែម handler ថ្មី
 )
 
 # ----------------------------------------------------
@@ -57,7 +59,11 @@ def generate_license_key(machine_id: str, days: int) -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """ចាប់ផ្តើម Conversation ហើយសុំ Machine ID។"""
-    await update.message.reply_text(
+    # ប្រើ update.message សម្រាប់ MessageHandler និង update.callback_query.message សម្រាប់ Callback
+    message_source = update.message if update.message else update.callback_query.message
+    
+    await message_source.reply_text(
+        # លុបចោលការរំលឹក 'លេខកូដ 24 តួ' ដែលធ្វើឲ្យមានការភ័ន្តច្រឡំ
         "👋 សួស្តី! សូមផ្ញើ **Machine ID** របស់កុំព្យូទ័រដែលអ្នកចង់ Activate:"
     )
     # រក្សាទុកក្នុង context សម្រាប់ប្រើពេលក្រោយ
@@ -70,7 +76,7 @@ async def get_machine_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     machine_id = update.message.text.strip()
     
     # === កែសម្រួលតាម GeneratorKeyLicense.cs ===
-    # កូដ C# គ្រាន់តែត្រួតពិនិត្យថា Machine ID មិនទទេប៉ុណ្ណោះ។
+    # លុបចោលការត្រួតពិនិត្យ 24 តួអក្សរ។ ត្រួតពិនិត្យតែថា Machine ID មិនទទេប៉ុណ្ណោះ។
     if not machine_id:
         await update.message.reply_text(
             "Machine ID មិនអាចទទេបានទេ។ សូមព្យាយាមផ្ញើ Machine ID ម្តងទៀត៖"
@@ -122,12 +128,34 @@ async def generate_key_and_finish(update: Update, context: ContextTypes.DEFAULT_
         f"```\n{license_key}\n```"
     )
     
-    await update.message.reply_text(message, parse_mode='Markdown')
-    
-    # ចំណាំ៖ នេះជាចំណុចដែលអ្នកអាចរក្សាទុក key និងព័ត៌មាននេះទៅកាន់ Database របស់អ្នកបាន។
+    # ----------------------------------------------------
+    # បន្ថែមប៊ូតុងសម្រាប់ធ្វើកូដថ្មី (New Key Button)
+    # ----------------------------------------------------
+    keyboard = [
+        [InlineKeyboardButton("🔑 ធ្វើកូដថ្មី (New Key)", callback_data='start_new_key')],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
+    await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+    
     # បញ្ចប់ Conversation
     return ConversationHandler.END
+
+
+async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """ចាប់ផ្តើម Conversation ឡើងវិញនៅពេលចុចប៊ូតុង Inline Key."""
+    query = update.callback_query
+    await query.answer() # Acknowledge the button click
+
+    # លុប Keyboard ចាស់ ដើម្បីកុំឲ្យច្របូកច្របល់
+    try:
+        await query.message.edit_reply_markup(reply_markup=None)
+    except error.BadRequest as e:
+        # បញ្ហាអាចកើតឡើងប្រសិនបើសារនោះចាស់ពេក ឬត្រូវបានកែរួចហើយ
+        logging.warning(f"Failed to edit message markup: {e}")
+        
+    # ចាប់ផ្តើម Conversation ឡើងវិញ
+    return await start(update, context)
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -161,6 +189,9 @@ def main():
 
     # បន្ថែម ConversationHandler
     application.add_handler(conv_handler)
+    
+    # បន្ថែម CallbackQueryHandler ដើម្បីចាប់ប៊ូតុង 'start_new_key'
+    application.add_handler(CallbackQueryHandler(restart_conversation, pattern='^start_new_key$'))
 
     # ចាប់ផ្តើម Polling
     logging.info("Bot is running...")
