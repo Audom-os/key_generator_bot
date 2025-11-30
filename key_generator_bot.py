@@ -1,7 +1,6 @@
 import base64
 import datetime
 import logging
-# បន្ថែម InlineKeyboardButton និង InlineKeyboardMarkup សម្រាប់ប៊ូតុង
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, error
 from telegram.ext import (
     Application,
@@ -10,7 +9,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ConversationHandler,
-    CallbackQueryHandler, # បន្ថែម handler ថ្មី
+    CallbackQueryHandler,
 )
 
 # ----------------------------------------------------
@@ -59,14 +58,11 @@ def generate_license_key(machine_id: str, days: int) -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """ចាប់ផ្តើម Conversation ហើយសុំ Machine ID។"""
-    # ប្រើ update.message សម្រាប់ MessageHandler និង update.callback_query.message សម្រាប់ Callback
     message_source = update.message if update.message else update.callback_query.message
     
     await message_source.reply_text(
-        # លុបចោលការរំលឹក 'លេខកូដ 24 តួ' ដែលធ្វើឲ្យមានការភ័ន្តច្រឡំ
         "👋 សួស្តី! សូមផ្ញើ **Machine ID** របស់កុំព្យូទ័រដែលអ្នកចង់ Activate:"
     )
-    # រក្សាទុកក្នុង context សម្រាប់ប្រើពេលក្រោយ
     context.user_data['machine_id'] = None 
     return MACHINE_ID_STEP
 
@@ -75,16 +71,12 @@ async def get_machine_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """ទទួល Machine ID និងសុំចំនួនថ្ងៃ។"""
     machine_id = update.message.text.strip()
     
-    # === កែសម្រួលតាម GeneratorKeyLicense.cs ===
-    # លុបចោលការត្រួតពិនិត្យ 24 តួអក្សរ។ ត្រួតពិនិត្យតែថា Machine ID មិនទទេប៉ុណ្ណោះ។
     if not machine_id:
         await update.message.reply_text(
             "Machine ID មិនអាចទទេបានទេ។ សូមព្យាយាមផ្ញើ Machine ID ម្តងទៀត៖"
         )
-        return MACHINE_ID_STEP # រង់ចាំ Machine ID ត្រឹមត្រូវ
-    # ==========================================
-    
-    # រក្សាទុក Machine ID
+        return MACHINE_ID_STEP
+
     context.user_data['machine_id'] = machine_id
     
     await update.message.reply_text(
@@ -106,19 +98,19 @@ async def generate_key_and_finish(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("សូមបញ្ចូលតែលេខប៉ុណ្ណោះ។ សូមបញ្ចូលចំនួនថ្ងៃម្តងទៀត៖")
         return DAYS_STEP
 
-    # យក Machine ID ដែលបានរក្សាទុក
     machine_id = context.user_data.get('machine_id')
     
     if not machine_id:
         await update.message.reply_text("❌ មានបញ្ហា៖ មិនមាន Machine ID ត្រូវបានរក្សាទុកទេ។ សូមចាប់ផ្តើមឡើងវិញដោយចុច /start")
         return ConversationHandler.END
 
-    # បង្កើត License Key
     license_key = generate_license_key(machine_id, days)
-
     expire_date = (datetime.date.today() + datetime.timedelta(days=days)).strftime('%Y-%m-%d')
 
-    # ផ្ញើ Key ទៅអ្នកប្រើប្រាស់
+    # === ជំហានថ្មី៖ រក្សាទុក Key សម្រាប់មុខងារ Copy ===
+    context.user_data['last_license_key'] = license_key 
+    # ===============================================
+
     message = (
         f"🎉 **បង្កើត License Key ជោគជ័យ!**\n\n"
         f"🔸 **Machine ID**: `{machine_id}`\n"
@@ -128,34 +120,49 @@ async def generate_key_and_finish(update: Update, context: ContextTypes.DEFAULT_
         f"```\n{license_key}\n```"
     )
     
-    # ----------------------------------------------------
-    # បន្ថែមប៊ូតុងសម្រាប់ធ្វើកូដថ្មី (New Key Button)
-    # ----------------------------------------------------
     keyboard = [
-        [InlineKeyboardButton("🔑 ធ្វើកូដថ្មី (New Key)", callback_data='start_new_key')],
+        [
+            # កែ callback_data ទៅជា 'copy_key_send'
+            InlineKeyboardButton("📝 ចម្លងកូដ (Copy Key)", callback_data='copy_key_send'), 
+            InlineKeyboardButton("🔑 ធ្វើកូដថ្មី (New Key)", callback_data='start_new_key')
+        ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
     
-    # បញ្ចប់ Conversation
     return ConversationHandler.END
 
 
 async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """ចាប់ផ្តើម Conversation ឡើងវិញនៅពេលចុចប៊ូតុង Inline Key."""
     query = update.callback_query
-    await query.answer() # Acknowledge the button click
+    await query.answer()
 
-    # លុប Keyboard ចាស់ ដើម្បីកុំឲ្យច្របូកច្របល់
+    # លុប Keyboard ចាស់
     try:
         await query.message.edit_reply_markup(reply_markup=None)
     except error.BadRequest as e:
-        # បញ្ហាអាចកើតឡើងប្រសិនបើសារនោះចាស់ពេក ឬត្រូវបានកែរួចហើយ
         logging.warning(f"Failed to edit message markup: {e}")
         
-    # ចាប់ផ្តើម Conversation ឡើងវិញ
     return await start(update, context)
+
+
+async def send_key_for_copying(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """ផ្ញើ Key ឡើងវិញជាសារថ្មី សម្រាប់ចម្លងងាយស្រួល។"""
+    query = update.callback_query
+    await query.answer("ផ្ញើកូដជាអក្សរធម្មតា...") # Pop-up ជូនដំណឹង
+
+    license_key = context.user_data.get('last_license_key')
+    
+    if license_key:
+        # ផ្ញើ Key ឡើងវិញជាសារថ្មីដើម្បីងាយស្រួល Copy
+        await query.message.reply_text(
+            f"🔑 **License Key (សម្រាប់ចម្លងងាយ)**:\n`{license_key}`", 
+            parse_mode='Markdown'
+        )
+    else:
+        await query.message.reply_text("❌ កូដមិនត្រូវបានរកឃើញទេ។ សូមបង្កើតកូដថ្មី។")
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -166,20 +173,16 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 def main():
     """ចាប់ផ្តើម Bot"""
-    # បង្កើត Application
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # បង្កើត ConversationHandler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         
         states={
             MACHINE_ID_STEP: [
-                # រង់ចាំ Machine ID ជា Text
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_machine_id)
             ],
             DAYS_STEP: [
-                # រង់ចាំចំនួនថ្ងៃជា Text (ដែលគួរតែជាលេខ)
                 MessageHandler(filters.TEXT & ~filters.COMMAND, generate_key_and_finish)
             ],
         },
@@ -187,13 +190,14 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # បន្ថែម ConversationHandler
     application.add_handler(conv_handler)
     
-    # បន្ថែម CallbackQueryHandler ដើម្បីចាប់ប៊ូតុង 'start_new_key'
+    # CallbackQueryHandler សម្រាប់ប៊ូតុង "Copy Key"
+    application.add_handler(CallbackQueryHandler(send_key_for_copying, pattern='^copy_key_send$'))
+    
+    # CallbackQueryHandler សម្រាប់ប៊ូតុង 'start_new_key'
     application.add_handler(CallbackQueryHandler(restart_conversation, pattern='^start_new_key$'))
 
-    # ចាប់ផ្តើម Polling
     logging.info("Bot is running...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
