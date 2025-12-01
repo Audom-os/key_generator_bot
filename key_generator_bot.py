@@ -58,6 +58,7 @@ def generate_license_key(machine_id: str, days: int) -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """ចាប់ផ្តើម Conversation ហើយសុំ Machine ID។"""
+    # ប្រើ message_source ដើម្បីទ្រទ្រង់ទាំង Command និង Callback Query
     message_source = update.message if update.message else update.callback_query.message
     
     await message_source.reply_text(
@@ -107,9 +108,8 @@ async def generate_key_and_finish(update: Update, context: ContextTypes.DEFAULT_
     license_key = generate_license_key(machine_id, days)
     expire_date = (datetime.date.today() + datetime.timedelta(days=days)).strftime('%Y-%m-%d')
 
-    # === ជំហានថ្មី៖ រក្សាទុក Key សម្រាប់មុខងារ Copy ===
+    # រក្សាទុក Key សម្រាប់មុខងារ Copy
     context.user_data['last_license_key'] = license_key 
-    # ===============================================
 
     message = (
         f"🎉 **បង្កើត License Key ជោគជ័យ!**\n\n"
@@ -122,7 +122,6 @@ async def generate_key_and_finish(update: Update, context: ContextTypes.DEFAULT_
     
     keyboard = [
         [
-            # កែ callback_data ទៅជា 'copy_key_send'
             InlineKeyboardButton("📝 ចម្លងកូដ (Copy Key)", callback_data='copy_key_send'), 
             InlineKeyboardButton("🔑 ធ្វើកូដថ្មី (New Key)", callback_data='start_new_key')
         ],
@@ -135,16 +134,28 @@ async def generate_key_and_finish(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def restart_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """ចាប់ផ្តើម Conversation ឡើងវិញនៅពេលចុចប៊ូតុង Inline Key."""
+    """ចាប់ផ្តើម Conversation ឡើងវិញនៅពេលចុចប៊ូតុង Inline Key។"""
     query = update.callback_query
-    await query.answer()
-
+    
+    # === ដំណោះស្រាយចំពោះ Query is too old (Issue 1) ===
+    # ឆ្លើយតបភ្លាមៗ ដើម្បីជៀសវាង Timeout Error
+    try:
+        await query.answer("ចាប់ផ្តើម Key ថ្មី...")
+    except error.BadRequest as e:
+        # ប្រសិនបើ Query ចាស់ពេក គ្រាន់តែ Logging ហើយបន្ត
+        logging.warning(f"Error answering callback query: {e}")
+        pass
+        
     # លុប Keyboard ចាស់
     try:
         await query.message.edit_reply_markup(reply_markup=None)
     except error.BadRequest as e:
-        logging.warning(f"Failed to edit message markup: {e}")
+        # Ignore if message is too old to edit
+        logging.warning(f"Failed to edit message markup on restart: {e}")
+        pass
         
+    # === ដំណោះស្រាយចំពោះបាត់បង់ State (Issue 2) ===
+    # ហៅ start() ហើយប្រគល់ State ទៅ ConversationHandler
     return await start(update, context)
 
 
@@ -175,8 +186,12 @@ def main():
     """ចាប់ផ្តើម Bot"""
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # === កែសម្រួល៖ បន្ថែម CallbackQueryHandler ទៅ entry_points ===
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(restart_conversation, pattern='^start_new_key$') # ឥឡូវនៅទីនេះ
+        ],
         
         states={
             MACHINE_ID_STEP: [
@@ -192,11 +207,10 @@ def main():
 
     application.add_handler(conv_handler)
     
-    # CallbackQueryHandler សម្រាប់ប៊ូតុង "Copy Key"
+    # CallbackQueryHandler សម្រាប់ប៊ូតុង "Copy Key" (នៅក្រៅ ConvHandler ព្រោះវាមិនប្តូរ State)
     application.add_handler(CallbackQueryHandler(send_key_for_copying, pattern='^copy_key_send$'))
-    
-    # CallbackQueryHandler សម្រាប់ប៊ូតុង 'start_new_key'
-    application.add_handler(CallbackQueryHandler(restart_conversation, pattern='^start_new_key$'))
+
+    # CallbackQueryHandler សម្រាប់ប៊ូតុង 'start_new_key' ត្រូវបានលុបចេញពីទីនេះហើយ
 
     logging.info("Bot is running...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
